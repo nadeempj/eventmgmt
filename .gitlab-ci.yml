@@ -1,0 +1,71 @@
+image: python:3.6
+
+.global:
+  before_script:
+    - export TAGGED_APP_VERSION=event_mgmt-`git describe --tags --always --abbrev=0`-`git rev-parse --short HEAD`
+    - export AS_USER="sudo -H -u username"
+    - echo "Tagged version = "$TAGGED_APP_VERSION
+    - export SERVICE_NAME=event_mgmt
+    - export DEPLOY_LOCATION_DEV=/home/username/system-storage/apps/dev.$SERVICE_NAME
+    - export DEPLOY_LOCATION_SIT=/home/username/system-storage/apps/sit.$SERVICE_NAME
+    - export DEPLOY_LOCATION_UAT=/home/username/system-storage/apps/uat.$SERVICE_NAME
+    - export RELEASE_LOCATION=/home/username/system-storage/releases
+  after_script:
+    - echo "All stages complete"
+
+stages:
+  - build
+  - deploy
+
+cache:
+  paths:
+    - .venv/
+    - wheelhouse/
+
+Build:
+  stage: build
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event") && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop") && $CI_COMMIT_TITLE =~ /^([0-9]+)\.([0-9]+)\.([0-9]+)-(build|alpha|beta|rc).([0-9-]+)?$/'
+  before_script:
+    - !reference [.global, before_script]
+  script:
+    - pip install virtualenv
+    - python3.6 -m virtualenv .venv
+    - source .venv/bin/activate
+    - python3.6 -m pip install -r requirements.txt
+    - python3.6 -m pip wheel -w wheelhouse --no-binary :all -r requirements.txt
+
+  after_script:
+    - echo "DEV-build after script"
+    - !reference [.global, after_script]
+  allow_failure: false
+
+Deploy:
+  stage: deploy
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event") && ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop") && ($CI_COMMIT_TITLE =~ /\bbuild\b/ )'
+  before_script:
+    - !reference [.global, before_script]
+  script:
+    - if [[ $CI_COMMIT_TITLE =~ "build" || $CI_COMMIT_TITLE =~ "alpha" ||  $CI_COMMIT_TITLE =~ "beta" ||  $CI_COMMIT_TITLE =~ "rc" ]]; then
+    # - pip install -r requirements.txt --no-index --find-links wheelhouse
+    -   export APP_VERSION=$TAGGED_APP_VERSION
+    -   export TAGGED_APP_VERSION=event_mgmt-$TAGGED_APP_VERSION
+    -   python setup.py sdist
+    -   echo $SSH_PRIVATE_KEY > tmp.pem
+    -   chmod 400 $SSH_PRIVATE_KEY
+    -   scp -i $SSH_PRIVATE_KEY -o StrictHostKeyChecking=no dist/$TAGGED_APP_VERSION.tar.gz username@domain:~
+    -   ssh -i $SSH_PRIVATE_KEY -o StrictHostKeyChecking=no username@domain "sudo systemctl stop dev.$SERVICE_NAME; $AS_USER bash -c \"cp $TAGGED_APP_VERSION.tar.gz $RELEASE_LOCATION; cd $DEPLOY_LOCATION_DEV; rm -rf {*,.*} 2>/dev/null; tar -xzf $RELEASE_LOCATION/$TAGGED_APP_VERSION.tar.gz; mv $TAGGED_APP_VERSION/* .; python3.6 -m pip install virtualenv; python3.6 -m virtualenv .venv; source .venv/bin/activate; mkdir -p .tmp; export TMPDIR=./.tmp; python3.6 -m pip install --upgrade -r requirements.txt  --no-binary :all --no-index --find-links wheelhouse; rm -rf $TAGGED_APP_VERSION;\"; cd; rm -f $TAGGED_APP_VERSION.tar; sudo systemctl start dev.$SERVICE_NAME;"
+    - fi
+    - if [[ $CI_COMMIT_TITLE =~ "alpha" ||  $CI_COMMIT_TITLE =~ "beta" ||  $CI_COMMIT_TITLE =~ "rc" ]]; then
+    -   echo "deploying to SIT"
+    -   ssh -i $SSH_PRIVATE_KEY -o StrictHostKeyChecking=no username@domain "sudo systemctl stop sit.$SERVICE_NAME; $AS_USER bash -c \"cp $TAGGED_APP_VERSION.tar.gz $RELEASE_LOCATION; cd $DEPLOY_LOCATION_SIT; rm -rf {*,.*} 2>/dev/null; tar -xzf $RELEASE_LOCATION/$TAGGED_APP_VERSION.tar.gz; mv $TAGGED_APP_VERSION/* .; python3.6 -m pip install virtualenv; python3.6 -m venv .venv; source .venv/bin/activate; mkdir .tmp;export TMPDIR=./.tmp; python3.6 -m pip install --upgrade -r requirements.txt  --no-binary :all --no-index --find-links wheelhouse; rm -rf $TAGGED_APP_VERSION;\"; cd; rm -f $TAGGED_APP_VERSION.tar; sudo systemctl start sit.$SERVICE_NAME;"
+    - fi
+    - if [[ $CI_COMMIT_TITLE =~ "beta" ||  $CI_COMMIT_TITLE =~ "rc" ]]; then
+    -   echo "deploying to uat / demo"
+    -   ssh -i $SSH_PRIVATE_KEY -o StrictHostKeyChecking=no username@domain "sudo systemctl stop uat.$SERVICE_NAME; $AS_USER bash -c \"cp $TAGGED_APP_VERSION.tar.gz $RELEASE_LOCATION; cd $DEPLOY_LOCATION_UAT; rm -rf {*,.*} 2>/dev/null; tar -xzf $RELEASE_LOCATION/$TAGGED_APP_VERSION.tar.gz; mv $TAGGED_APP_VERSION/* .; python3.6 -m pip install virtualenv; python3.6 -m venv .venv; source .venv/bin/activate; mkdir .tmp;export TMPDIR=./.tmp; python3.6 -m pip install --upgrade -r requirements.txt  --no-binary :all --no-index --find-links wheelhouse; rm -rf $TAGGED_APP_VERSION;\"; cd; rm -f $TAGGED_APP_VERSION.tar; sudo systemctl start uat.$SERVICE_NAME;"
+    - fi
+  after_script:
+    - echo "DEV-build after script"
+    - !reference [.global, after_script]
+  allow_failure: false

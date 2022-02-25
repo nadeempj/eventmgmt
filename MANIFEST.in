@@ -1,0 +1,12 @@
+include manage.py
+include .env.dev
+include requirements.txt
+recursive-include static *
+recursive-include users *
+recursive-include docker-compose.yml
+recursive-include Dockerfile
+recursive-include entrypoint.sh
+recursive-include group.py
+recursive-include readme.md
+recursive-include openApi.yaml
+recursive-include wheelhouse *
